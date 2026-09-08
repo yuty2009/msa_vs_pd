@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+.venv/
+venv/
+env/
+ENV/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Raw and derived research data
+*.edf
+*.bdf
+*.fif
+*.vhdr
+*.eeg
+*.vmrk
+*.mat
+*.h5
+*.hdf5
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.xlsx
+*.xls
+
+# Generated outputs and logs
+results/
+output/
+outputs/
+logs/
+*.log
+*.tmp
+*.swp
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
