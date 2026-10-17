@@ -1,13 +1,14 @@
-
 import os
-import mne
 import glob
 import natsort
-import pyedflib
 import numpy as np
 import pandas as pd
-import sys; sys.path.append(os.path.dirname(__file__))
-from sleeputils import resample, get_features, get_features_yasa, get_aperiodic_features, get_connectivity_features
+try:
+    from .sleeputils import resample, EdfFile
+    from . import sleeputils
+except ImportError:
+    from sleeputils import resample, EdfFile
+    import sleeputils
 
 stage_dict = {
     'W': 0,
@@ -33,20 +34,12 @@ def load_eegdata_ruijin(psg_fname, ann_fname, select_ch=['C4-A1', 'C4-M1', 'C4',
     else:
         labels = np.array([])
 
-    raw, psg_f = None, None
     try:
-        psg_f = pyedflib.EdfReader(psg_fname)
-        # start_datetime = psg_f.getStartdatetime()
-    except Exception as e:
-        try:
-            raw = mne.io.read_raw_edf(psg_fname, preload=True)
-        except Exception as e1:
-            return None
+        edf = EdfFile(psg_fname)
+    except Exception:
+        return None
 
-    if raw is not None:
-        ch_names = raw.info['ch_names'] # 
-    elif psg_f is not None:
-        ch_names = psg_f.getSignalLabels() # 
+    ch_names = edf.ch_names
 
     select_ch_idx = -1
     for s in range(len(select_ch)):
@@ -55,15 +48,13 @@ def load_eegdata_ruijin(psg_fname, ann_fname, select_ch=['C4-A1', 'C4-M1', 'C4',
             break
     
     if select_ch_idx == -1:
+        edf.close()
         return None
 
     ch_selected = ch_names[select_ch_idx]
-    if raw is not None:
-        sampling_rate = raw.info['sfreq'] # 
-        signals = raw.get_data(picks=ch_selected)[0] # 
-    elif psg_f is not None:
-        sampling_rate = psg_f.getSampleFrequency(select_ch_idx) # raw.info['sfreq'] # 
-        signals = psg_f.readSignal(select_ch_idx) # raw.get_data(picks=ch_selected)[0] #
+    sampling_rate = edf.sampling_rate(select_ch_idx)
+    signals = edf.read_signal(select_ch_idx)
+    edf.close()
 
     if sampling_rate != target_fs:
         signals = resample(signals, sampling_rate, target_fs)
@@ -131,20 +122,12 @@ def load_eegdata_ruijin_multichannel(
     else:
         labels = np.array([])
 
-    raw, psg_f = None, None
     try:
-        psg_f = pyedflib.EdfReader(psg_fname)
-        # start_datetime = psg_f.getStartdatetime()
-    except Exception as e:
-        try:
-            raw = mne.io.read_raw_edf(psg_fname, preload=True)
-        except Exception as e1:
-            return None
+        edf = EdfFile(psg_fname)
+    except Exception:
+        return None
 
-    if raw is not None:
-        ch_names = raw.info['ch_names'] # 
-    elif psg_f is not None:
-        ch_names = psg_f.getSignalLabels() # 
+    ch_names = edf.ch_names
     select_ch_idx = -np.ones((len(eeg)+3), dtype=int) # EEG(6) + EOG(1) + EMG(1) + ECG(1)
     for s in range(len(eeg)):
         for ch in ch_names:
@@ -188,12 +171,8 @@ def load_eegdata_ruijin_multichannel(
             ch_i = ch_names[select_ch_idx[s]]
             ch_selected.append(ch_i)
             ch_mask.append(True)
-            if raw is not None:
-                sampling_rate = raw.info['sfreq'] # 
-                signal_ch = raw.get_data(picks=ch_i)[0] # 
-            elif psg_f is not None:
-                sampling_rate = psg_f.getSampleFrequency(select_ch_idx[s]) # raw.info['sfreq'] # 
-                signal_ch = psg_f.readSignal(select_ch_idx[s]) # raw.get_data(picks=ch_selected)[0] # 
+            sampling_rate = edf.sampling_rate(select_ch_idx[s])
+            signal_ch = edf.read_signal(select_ch_idx[s])
             if sampling_rate != target_fs:
                 signal_ch = resample(signal_ch, sampling_rate, target_fs)
             n_totalpoints = len(signal_ch)
@@ -201,6 +180,7 @@ def load_eegdata_ruijin_multichannel(
     for s in range(n_channels):
         if select_ch_idx[s] == -1:
             signals[s] = np.zeros((n_totalpoints))
+    edf.close()
     signals = np.stack(signals, axis=0)
     
     epoch_duration = 30
@@ -254,61 +234,17 @@ def load_eegdata_ruijin_multichannel(
 
     return data_dict
 
-def load_npz_file(npz_file):
-    """Load data and labels from a npz file."""
-    with np.load(npz_file) as f:
-        if len(f['x'].shape) > 2:
-            data = f['x'] # [:, :, :6] # use EEG only
-        else:
-            data = f['x']
-        assert np.isnan(data).any() == False, f"Found NaN in {npz_file}."
-        labels = f["y"]
-        sampling_rate = f["fs"]
-        ch_label = f["ch_label"]
-        keep_idx = f['keep_idx']
-        edf_path = f['edf_path']
-    return data, labels, sampling_rate, ch_label, keep_idx, edf_path
-
-def load_npz_list_files(npz_files):
-    """Load data and labels from list of npz files."""
-    data = []
-    labels = []
-    ch_labels = []
-    keep_idxs = []
-    edf_paths = []
-    fs = None
-    for npz_f in npz_files:
-        # print("Loading {} ...".format(npz_f))
-        tmp_data, tmp_labels, sampling_rate, ch_label, keep_idx, edf_path = load_npz_file(npz_f)
-        if fs is None:
-            fs = sampling_rate
-        elif fs != sampling_rate:
-            raise Exception("Found mismatch in sampling rate.")
-
-        # # Reshape the data to match the input of the model - conv2d
-        if len(tmp_data.shape) == 2:
-            tmp_data = tmp_data[:, :, np.newaxis]
-
-        # Casting
-        tmp_data = tmp_data.astype(np.float32)
-        tmp_labels = tmp_labels.astype(np.int32)
-
-        data.append(tmp_data)
-        labels.append(tmp_labels)
-        ch_labels.append(ch_label)
-        keep_idxs.append(keep_idx)
-        edf_paths.append(edf_path)
-
-    return data, labels, ch_labels, keep_idxs, edf_paths
+# options for sleeputils.load_npz_file
+NPZ_OPTS = dict(nan='raise')
 
 def load_subdata_preprocessed(datapath, subject):
     npz_f = os.path.join(datapath, subject+'.npz')
-    data, labels, fs, _, _, _ = load_npz_file(npz_f)
+    data, labels, fs, _, _, _ = sleeputils.load_npz_file(npz_f, **NPZ_OPTS)
     return data, labels
 
 def load_dataset_preprocessed(datapath, subsets=None, subjects=None, extra_info=False):
     npzfiles, subjects = load_npzlist_preprocessed(datapath, subsets=subsets, subjects=subjects)
-    data, labels, ch_labels, keep_idxs, edf_paths = load_npz_list_files(npzfiles)
+    data, labels, ch_labels, keep_idxs, edf_paths = sleeputils.load_npz_list_files(npzfiles, verbose=False, **NPZ_OPTS)
     if extra_info:
         return data, labels, subjects, ch_labels, keep_idxs, edf_paths
     else:
