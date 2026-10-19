@@ -138,8 +138,12 @@ def segment(
         chosen_peaks = random_state.choice(n_peaks, size=max_n_peaks, replace=False)
         peaks = peaks[chosen_peaks]
 
-    # Cache this value for later
+    # Cache these values for later
     gfp_sum_sq = np.sum(gfp**2)
+    data_mean = np.mean(data, axis=0, dtype=np.float64)
+    data_peaks = data[:, peaks]
+    n_channels = data.shape[0]
+    idx_samples = np.arange(data.shape[1])
 
     # Do several runs of the k-means algorithm, keep track of the best
     # segmentation.
@@ -149,7 +153,7 @@ def segment(
     best_polarity = None
     for _ in range(n_inits):
         maps = _mod_kmeans(
-            data[:, peaks],
+            data_peaks,
             n_states,
             n_inits,
             max_iter,
@@ -161,12 +165,18 @@ def segment(
         )
         activation = maps.dot(data)
         segmentation = np.argmax(np.abs(activation), axis=0)
-        map_corr = _corr_vectors(data, maps[segmentation].T)
         # assigned_activations = np.choose(segmentations, activation)
 
         # Compare across iterations using global explained variance (GEV) of
-        # the found microstates.
-        gev = sum((gfp * map_corr) ** 2) / gfp_sum_sq
+        # the found microstates. gfp * corr(data, assigned map) is computed from
+        # the activation instead of _corr_vectors, avoiding copies of the full data:
+        # gfp * corr = (x.m - n * mean(x) * mean(m)) / (sqrt(n) * ||m - mean(m)||)
+        maps_mean = np.mean(maps, axis=1, dtype=np.float64)
+        maps_cnorm = np.linalg.norm(maps - maps_mean[:, None], axis=1)
+        gfp_corr = (activation[segmentation, idx_samples].astype(np.float64)
+                    - n_channels * data_mean * maps_mean[segmentation])
+        gfp_corr /= np.sqrt(n_channels) * maps_cnorm[segmentation]
+        gev = np.sum(gfp_corr ** 2) / gfp_sum_sq
         if verbose: print("GEV of found microstates: %f" % gev)
         if gev > best_gev:
             best_gev, best_maps, best_segmentation = gev, maps, segmentation
